@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SentinAI — Real-Time YOLOv5 Traffic Surveillance & Incident Detection</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="/static/styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+</head>
+<body>
+  <!-- Apple Frosted Glass Navigation Bar -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-badge">V5</div>
+      <div class="brand-title">
+        <h1>SentinAI Traffic Intelligence</h1>
+        <p id="cameraLocationSubtitle">YOLOv5 + ByteTrack Re-ID · 4-Point Homography Radar · IDD 3-Wheeler Classifier</p>
+      </div>
+    </div>
+
+    <div class="topbar-controls">
+      <div class="status-pill">
+        <span class="status-dot"></span>
+        <span id="engineModeLabel">YOLOv5 + Re-ID Ready</span>
+      </div>
+
+      <button class="btn btn-primary" id="btnStartWebcam" title="Use your computer's live webcam for 60 FPS YOLOv5 tracking">
+        🎥 Live Camera
+      </button>
+
+      <button class="btn btn-warning" id="btnUploadVideo" title="Upload a real traffic video (.mp4, .webm, .mov) for live YOLOv5 tracking">
+        📁 Upload Traffic Video
+      </button>
+      <input type="file" id="videoFileInput" accept="video/mp4,video/webm,video/ogg,video/quicktime,video/x-msvideo,video/*" style="display:none;" />
+
+      <select id="cameraSelector" class="select-control" title="Select Surveillance Feed Source">
+        <option value="cam_01">Highway Corridor Sim (80 km/h)</option>
+        <option value="cam_02">Urban Arterial Sim (50 km/h)</option>
+        <option value="cam_webcam">Live Hardware Camera (YOLOv5)</option>
+        <option value="cam_upload">Uploaded Traffic Video (YOLOv5)</option>
+      </select>
+
+      <button class="btn btn-danger" id="btnTriggerSpeeder" title="Inject a high-speed vehicle (Sim mode)">
+        + Speeder
+      </button>
+      <button class="btn" id="btnExportCsv" title="Download CSV Violation Report">
+        Export CSV
+      </button>
+      <button class="btn" id="btnResetStats" title="Reset All Counters">
+        Reset
+      </button>
+    </div>
+  </header>
+
+  <!-- Apple Bento KPI Row -->
+  <section class="kpi-grid">
+    <div class="kpi-card">
+      <span class="kpi-label">Active Tracked Vehicles</span>
+      <div class="kpi-value" id="kpiActiveVehicles">0</div>
+      <span class="kpi-sub" id="kpiInOutSplit">Inbound: 0 · Outbound: 0</span>
+    </div>
+
+    <div class="kpi-card emerald">
+      <span class="kpi-label">Total Vehicles Counted</span>
+      <div class="kpi-value" id="kpiTotalCounted">0</div>
+      <span class="kpi-sub">Virtual Sensor Crossings</span>
+    </div>
+
+    <div class="kpi-card">
+      <span class="kpi-label">Traffic Flow Rate</span>
+      <div class="kpi-value" id="kpiFlowRate">0 <small style="font-size:0.85rem;font-weight:500;color:#6e6e73;">veh/min</small></div>
+      <span class="kpi-sub">Rolling 60s Throughput</span>
+    </div>
+
+    <div class="kpi-card purple">
+      <span class="kpi-label">Homography Mean Speed</span>
+      <div class="kpi-value" id="kpiAvgSpeed">0.0 <small style="font-size:0.85rem;font-weight:500;color:#6e6e73;">km/h</small></div>
+      <span class="kpi-sub" id="kpiMaxSpeed">Peak Clocked: 0.0 km/h</span>
+    </div>
+
+    <div class="kpi-card warn">
+      <span class="kpi-label">Corridor Congestion</span>
+      <div class="kpi-value" id="kpiCongestion">LOW</div>
+      <span class="kpi-sub" id="kpiFps">60 FPS Kalman Interpolation</span>
+    </div>
+
+    <div class="kpi-card danger">
+      <span class="kpi-label">Flagged Violations</span>
+      <div class="kpi-value" id="kpiViolationCount">0</div>
+      <span class="kpi-sub">Overspeed · Wrong-Way · Stalled</span>
+    </div>
+  </section>
+
+  <!-- Main Workspace -->
+  <main class="dashboard-grid">
+    <div class="left-column">
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span id="feedHeaderTitle">Live Vision Feed (60 FPS Kalman + ByteTrack Re-ID)</span>
+          </div>
+          <span style="font-size:0.78rem;color:var(--text-secondary);" id="activeCamBadge">
+            Click "🎥 Live Camera" or "📁 Upload Traffic Video" above to track real footage
+          </span>
+        </div>
+
+        <div class="video-stage">
+          <video id="rawVideoSource" playsinline muted loop style="display:none;"></video>
+          <img id="backendStreamImg" alt="Live Backend Stream" style="display:none;" />
+          <canvas id="simCanvas" width="1280" height="720"></canvas>
+        </div>
+
+        <div class="hud-toolbar">
+          <div class="toggle-group">
+            <label><input type="checkbox" id="chkTrails" checked /> Trajectory Trails</label>
+            <label><input type="checkbox" id="chkSpeedTags" checked /> Speed & Class Pills</label>
+            <label><input type="checkbox" id="chkZones" checked /> Sensor Line</label>
+            <label><input type="checkbox" id="chkHomography" checked /> 4-Pt Homography Zone</label>
+            <label><input type="checkbox" id="chkHeatmap" /> Density Heatmap</label>
+          </div>
+
+          <div class="slider-group">
+            <span>Sensor Y</span>
+            <input type="range" id="sensorLineSlider" min="25" max="80" step="1" value="62" style="width:80px;" />
+            <span>Speed Limit: <strong id="speedLimitLabel" style="color:var(--text-primary);">80 km/h</strong></span>
+            <input type="range" id="speedLimitSlider" min="15" max="130" step="5" value="80" />
+          </div>
+        </div>
+      </div>
+
+      <div class="sub-analytics-grid">
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title">IDD Vehicle Classification (Cars, Auto-Rickshaws, 2W, Heavy)</div>
+          </div>
+          <div class="class-bars" id="classBarsContainer"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title">Lane Occupancy & Homography Speed Telemetry</div>
+          </div>
+          <div class="lane-grid" id="laneGridContainer">
+            <div class="lane-box"><h4>LANE 1</h4><div class="lane-val" id="laneVal1">0</div><div class="lane-dir">Zone 1</div></div>
+            <div class="lane-box"><h4>LANE 2</h4><div class="lane-val" id="laneVal2">0</div><div class="lane-dir">Zone 2</div></div>
+            <div class="lane-box"><h4>LANE 3</h4><div class="lane-val" id="laneVal3">0</div><div class="lane-dir">Zone 3</div></div>
+            <div class="lane-box"><h4>LANE 4</h4><div class="lane-val" id="laneVal4">0</div><div class="lane-dir">Zone 4</div></div>
+          </div>
+          <div style="padding: 0 1.25rem 1rem;">
+            <canvas id="telemetryChart" width="520" height="125"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="right-column">
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">Automated Violation & Incident Feed</div>
+          <span style="font-size:0.75rem;color:var(--text-muted);">Live Enforcement Log</span>
+        </div>
+        <div class="incident-list" id="incidentFeedContainer"></div>
+      </div>
+
+      <div class="panel" style="flex:1;">
+        <div class="panel-header">
+          <div class="panel-title">Active ByteTrack + Re-ID State</div>
+          <span style="font-size:0.75rem;color:var(--text-muted);">2-Stage IoU + Appearance Cosine Match</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Track</th>
+                <th>Class</th>
+                <th>Conf</th>
+                <th>Lane</th>
+                <th>Direction</th>
+                <th>Speed</th>
+              </tr>
+            </thead>
+            <tbody id="activeTracksBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="app.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

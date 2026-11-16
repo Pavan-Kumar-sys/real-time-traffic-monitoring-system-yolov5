@@ -1,0 +1,21 @@
+# Personal Study & Interview Notes (Keep strictly local — DO NOT push to GitHub)
+Project_Engineering_Walkthrough_Personal_Notes.pdf
+Project_Engineering_Walkthrough_Personal_Notes.html
+*.pdf
+
+# Python & Environment
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# Runtime Databases, Uploaded Videos & Model Weights
+*.db
+*.sqlite3
+uploads/
+runs/
+*.pt
+*.onnx
